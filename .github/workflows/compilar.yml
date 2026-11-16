@@ -41,24 +41,63 @@ jobs:
             echo "No hay twg51.zip; se usan los archivos que ya están en el repo."
           fi
 
+      # Deja en el repo el contenido descomprimido, para poder verlo y editarlo en GitHub.
+      # Va antes de cualquier otro paso, así no se suben archivos generados.
+      # La carpeta .github NO se actualiza sola: GitHub no deja que el workflow modifique
+      # workflows (seguridad). Si cambia compilar.yml hay que pegarlo a mano.
+      # "[skip ci]" evita que este commit vuelva a disparar la compilación.
+      - name: Guardar lo descomprimido en el repo
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git reset -q -- .github || true
+          if git diff --cached --quiet; then
+            echo "El repo ya tenía este contenido; no hay nada que guardar."
+          else
+            git commit -q -m "Descomprimir twg51.zip [skip ci]"
+            git push
+            echo "Contenido de twg51.zip guardado en el repo."
+          fi
+          if ! git diff --quiet -- .github; then
+            echo "::warning::El zip trae un compilar.yml distinto al del repo. Copialo a mano en .github/workflows/compilar.yml para usar la versión nueva."
+          fi
+
       - name: Pruebas del script
         run: python3 -m unittest discover -s tests -v
 
+      # El firmware (3 GB) se baja y se extrae una sola vez: lo extraído (~1 GB) se guarda
+      # en la caché de GitHub. Solo se vuelve a bajar si cambia config/firmware.conf o
+      # scripts/extraer_firmware.sh, o si la caché no se usó en 7 días (GitHub la borra).
+      - name: Carpeta de trabajo
+        run: |
+          sudo mkdir -p /mnt/trabajo
+          sudo chown "$(id -u):$(id -g)" /mnt/trabajo
+
+      - name: Buscar firmware ya extraído (caché)
+        id: cache_fw
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/trabajo/ext
+          key: firmware-${{ hashFiles('config/firmware.conf', 'scripts/extraer_firmware.sh') }}
+
       - name: Liberar espacio en disco
+        if: steps.cache_fw.outputs.cache-hit != 'true'
         run: bash scripts/liberar_espacio.sh
 
       - name: Instalar herramientas
+        if: steps.cache_fw.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y android-sdk-libsparse-utils lz4 cpio xxd e2fsprogs erofs-utils unzip curl
 
       - name: Bajar el firmware de stock
+        if: steps.cache_fw.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           source config/firmware.conf
-          mkdir -p /mnt/trabajo 2>/dev/null || sudo mkdir -p /mnt/trabajo
-          sudo chown "$(id -u):$(id -g)" /mnt/trabajo
           if [ -n "${FIRMWARE_URL:-}" ]; then
             echo "Bajando desde config/firmware.conf"
             curl -L --fail --retry 3 -o /mnt/trabajo/firmware.zip "$FIRMWARE_URL"
@@ -71,7 +110,27 @@ jobs:
           ls -la /mnt/trabajo
 
       - name: Extraer kernel, vendor_boot y vendor
-        run: bash scripts/extraer_firmware.sh /mnt/trabajo/firmware.zip /mnt/trabajo/ext
+        if: steps.cache_fw.outputs.cache-hit != 'true'
+        run: |
+          bash scripts/extraer_firmware.sh /mnt/trabajo/firmware.zip /mnt/trabajo/ext
+          # Para la caché solo se guarda lo que usa preparar_arbol.py.
+          cd /mnt/trabajo/ext
+          rm -rf fw herramientas particiones montaje boot_out vboot_out
+          rm -f /mnt/trabajo/firmware.zip
+          du -sh /mnt/trabajo/ext
+
+      - name: Guardar firmware extraído en la caché
+        if: steps.cache_fw.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/trabajo/ext
+          key: ${{ steps.cache_fw.outputs.cache-primary-key }}
+
+      - name: Firmware desde la caché
+        if: steps.cache_fw.outputs.cache-hit == 'true'
+        run: |
+          echo "Se usó el firmware ya extraído de una compilación anterior (no se bajó de nuevo)."
+          du -sh /mnt/trabajo/ext
 
       - name: Completar el device tree
         run: |
