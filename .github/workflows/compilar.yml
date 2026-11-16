@@ -1,0 +1,183 @@
+# TWG51 - TWRP para Motorola Moto G51 5G (cypfq)
+# Creado por Andrés Londero
+#
+# Al subir twg51.zip al repo:
+#   1) "preparar": descomprime el zip, corre las pruebas, baja el firmware de
+#      stock y completa el device tree (kernel, módulos táctiles, fstab).
+#   2) "compilar": baja el código de TWRP 12.1 (manifiesto mínimo) y compila.
+# El resultado (twrp-cypfq-*.img) queda en los artefactos y en un Release.
+
+name: Compilar TWRP G51
+
+on:
+  push:
+    paths:
+      - 'twg51.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RAMA_TWRP: twrp-12.1
+  MANIFIESTO: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+  DISPOSITIVO: cypfq
+  RUTA_ARBOL: device/motorola/cypfq
+
+jobs:
+  preparar:
+    name: Preparar árbol desde el firmware
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Bajar el repo
+        uses: actions/checkout@v4
+
+      - name: Descomprimir twg51.zip
+        run: |
+          if [ -f twg51.zip ]; then
+            unzip -o twg51.zip -d .
+          else
+            echo "No hay twg51.zip; se usan los archivos que ya están en el repo."
+          fi
+
+      - name: Pruebas del script
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Liberar espacio en disco
+        run: bash scripts/liberar_espacio.sh
+
+      - name: Instalar herramientas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y android-sdk-libsparse-utils lz4 cpio xxd e2fsprogs erofs-utils unzip curl
+
+      - name: Bajar el firmware de stock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source config/firmware.conf
+          mkdir -p /mnt/trabajo 2>/dev/null || sudo mkdir -p /mnt/trabajo
+          sudo chown "$(id -u):$(id -g)" /mnt/trabajo
+          if [ -n "${FIRMWARE_URL:-}" ]; then
+            echo "Bajando desde config/firmware.conf"
+            curl -L --fail --retry 3 -o /mnt/trabajo/firmware.zip "$FIRMWARE_URL"
+          elif gh release download firmware -p firmware.zip -D /mnt/trabajo -R "$GITHUB_REPOSITORY"; then
+            echo "Bajado del Release 'firmware'"
+          else
+            echo "::error::No hay firmware. Completá FIRMWARE_URL en config/firmware.conf o subí firmware.zip a un Release con etiqueta 'firmware'."
+            exit 1
+          fi
+          ls -la /mnt/trabajo
+
+      - name: Extraer kernel, vendor_boot y vendor
+        run: bash scripts/extraer_firmware.sh /mnt/trabajo/firmware.zip /mnt/trabajo/ext
+
+      - name: Completar el device tree
+        run: |
+          python3 -I scripts/preparar_arbol.py \
+            --vendor /mnt/trabajo/ext/vendor \
+            --kernel /mnt/trabajo/ext/kernel \
+            --vendor-ramdisk /mnt/trabajo/ext/vendor_ramdisk \
+            --arbol "$RUTA_ARBOL" \
+            --reporte reporte-firmware.md
+          cat reporte-firmware.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar árbol preparado
+        uses: actions/upload-artifact@v4
+        with:
+          name: arbol-cypfq
+          path: ${{ env.RUTA_ARBOL }}
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Guardar reporte
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-firmware
+          path: reporte-firmware.md
+
+  compilar:
+    name: Compilar TWRP
+    needs: preparar
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Bajar el repo
+        uses: actions/checkout@v4
+
+      - name: Descomprimir twg51.zip
+        run: |
+          if [ -f twg51.zip ]; then unzip -o twg51.zip -d .; fi
+
+      - name: Liberar espacio en disco
+        run: bash scripts/liberar_espacio.sh
+
+      - name: Instalar dependencias de compilación
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git git-lfs gnupg gperf imagemagick lib32z1-dev libelf-dev lz4 \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
+            zip zlib1g-dev python3 python-is-python3 unzip
+          # AOSP 12 todavía usa libncurses5 / libtinfo5 en algunas herramientas prearmadas.
+          cd /tmp
+          wget -q https://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2_amd64.deb && sudo dpkg -i libtinfo5_6.3-2_amd64.deb || true
+          wget -q https://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2_amd64.deb && sudo dpkg -i libncurses5_6.3-2_amd64.deb || true
+          mkdir -p ~/bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.name "TWG51"
+          git config --global user.email "twg51@users.noreply.github.com"
+
+      - name: Bajar el código de TWRP (${{ env.RAMA_TWRP }})
+        run: |
+          sudo mkdir -p /mnt/twrp && sudo chown "$(id -u):$(id -g)" /mnt/twrp
+          cd /mnt/twrp
+          repo init --depth=1 -u "$MANIFIESTO" -b "$RAMA_TWRP" --git-lfs
+          repo sync -c -j"$(nproc)" --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
+
+      - name: Traer el árbol preparado
+        uses: actions/download-artifact@v4
+        with:
+          name: arbol-cypfq
+          path: /mnt/twrp/${{ env.RUTA_ARBOL }}
+
+      - name: Compilar
+        run: |
+          cd /mnt/twrp
+          export ALLOW_MISSING_DEPENDENCIES=true
+          set +u
+          source build/envsetup.sh
+          lunch twrp_${DISPOSITIVO}-eng
+          mka bootimage -j"$(nproc)"
+
+      - name: Renombrar resultado
+        id: resultado
+        run: |
+          FECHA=$(date +%Y%m%d-%H%M)
+          SALIDA=/mnt/twrp/out/target/product/$DISPOSITIVO
+          mkdir -p resultado
+          cp "$SALIDA/boot.img" "resultado/twrp-${DISPOSITIVO}-${FECHA}.img"
+          sha256sum resultado/*.img > resultado/SHA256.txt
+          echo "fecha=$FECHA" >> "$GITHUB_OUTPUT"
+          ls -la resultado
+
+      - name: Guardar imagen
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-cypfq-${{ steps.resultado.outputs.fecha }}
+          path: resultado/
+
+      - name: Publicar Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: twrp-${{ steps.resultado.outputs.fecha }}
+          name: TWRP G51 (cypfq) ${{ steps.resultado.outputs.fecha }}
+          prerelease: true
+          body: |
+            TWRP para Moto G51 5G (cypfq) — fase 1 (sin descifrado). Creado por Andrés Londero.
+            Probar SIEMPRE primero sin instalar:  fastboot boot twrp-cypfq-*.img
+            Ver docs/PRUEBAS-EN-EL-TELEFONO.md
+          files: resultado/*
