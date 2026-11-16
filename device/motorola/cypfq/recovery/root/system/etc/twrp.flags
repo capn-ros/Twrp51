@@ -1,0 +1,30 @@
+# TWG51 - TWRP para Motorola Moto G51 5G (cypfq)
+# Creado por Andrés Londero
+#
+# Particiones extra que maneja TWRP (backup, flasheo de imágenes y almacenamiento).
+# Las particiones del sistema (system, vendor, data...) vienen del fstab de stock
+# que genera el workflow en recovery.fstab.
+#
+# <punto de montaje> <fs> <dispositivo> [dispositivo alternativo] flags=...
+
+/boot           emmc    /dev/block/bootdevice/by-name/boot           flags=display="Boot";backup=1;flashimg=1;slotselect
+/vendor_boot    emmc    /dev/block/bootdevice/by-name/vendor_boot    flags=display="Vendor Boot";backup=1;flashimg=1;slotselect
+/dtbo           emmc    /dev/block/bootdevice/by-name/dtbo           flags=display="DTBO";backup=1;flashimg=1;slotselect
+/vbmeta         emmc    /dev/block/bootdevice/by-name/vbmeta         flags=display="VBMeta";backup=1;flashimg=1;slotselect
+/vbmeta_system  emmc    /dev/block/bootdevice/by-name/vbmeta_system  flags=display="VBMeta System";backup=1;flashimg=1;slotselect
+/misc           emmc    /dev/block/bootdevice/by-name/misc           flags=display="Misc"
+
+# Firmware del módem (solo lectura; en la fase 2 se usa para descifrar).
+/firmware       vfat    /dev/block/bootdevice/by-name/modem          flags=display="Firmware";mounttodecrypt;fsflags=ro;slotselect
+
+# Persist y EFS (IMEI / calibraciones): conviene tener backup ANTES de tocar nada.
+/persist        ext4    /dev/block/bootdevice/by-name/persist        flags=display="Persist";backup=1
+/efs1           emmc    /dev/block/bootdevice/by-name/modemst1       flags=display="EFS";backup=1
+/efs2           emmc    /dev/block/bootdevice/by-name/modemst2       flags=backup=1;subpartitionof=/efs1
+/efsc           emmc    /dev/block/bootdevice/by-name/fsc            flags=backup=1;subpartitionof=/efs1
+/efsg           emmc    /dev/block/bootdevice/by-name/fsg            flags=backup=1;subpartitionof=/efs1
+
+# Almacenamiento externo. El G51 usa UFS, así que la microSD es mmcblk0
+# (a verificar en la prueba: ver docs/PRUEBAS-EN-EL-TELEFONO.md).
+/external_sd    auto    /dev/block/mmcblk0p1   /dev/block/mmcblk0    flags=display="MicroSD";storage;removable
+/usb_otg        auto    /dev/block/sdg1        /dev/block/sdg        flags=display="USB OTG";storage;removable

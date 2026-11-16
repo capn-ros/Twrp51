@@ -1,0 +1,17 @@
+#
+# TWG51 - TWRP para Motorola Moto G51 5G (cypfq)
+# Creado por Andrés Londero
+#
+# Arranque propio del recovery para el G51.
+#
+
+on early-init
+    # USB por configfs (adb, MTP y fastbootd).
+    # El bootloader de Qualcomm pasa el controlador en androidboot.usbcontroller.
+    setprop sys.usb.configfs 1
+    setprop sys.usb.controller ${ro.boot.usbcontroller}
+
+on init
+    # Carga los módulos del táctil (todas las variantes de pantalla) y, si
+    # hiciera falta, completa el controlador USB. Ver system/bin/twg51_modulos.sh.
+    exec u:r:recovery:s0 root root -- /system/bin/sh /system/bin/twg51_modulos.sh

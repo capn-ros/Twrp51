@@ -1,0 +1,2 @@
+# TWG51 - Creado por Andrés Londero
+# El workflow genera acá info.mk (scripts/preparar_arbol.py). No editar a mano.

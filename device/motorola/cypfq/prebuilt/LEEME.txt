@@ -1,0 +1,3 @@
+# TWG51 - Creado por Andrés Londero
+# El workflow copia acá el kernel del boot.img de stock (archivo "kernel").
+# No subir un kernel a mano: tiene que ser del mismo firmware que el teléfono.
