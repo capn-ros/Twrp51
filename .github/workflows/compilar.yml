@@ -197,6 +197,29 @@ jobs:
           repo init --depth=1 -u "$MANIFIESTO" -b "$RAMA_TWRP" --git-lfs
           repo sync -c -j"$(nproc)" --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
 
+      # ccache: guarda en la caché de GitHub los objetos ya compilados. Desde la segunda
+      # compilación solo se recompila lo que cambió (la descarga del código no se puede ahorrar).
+      - name: Restaurar ccache
+        id: ccache_rest
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/ccache
+          key: ccache-${{ env.RAMA_TWRP }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ env.RAMA_TWRP }}-
+
+      - name: Configurar ccache
+        run: |
+          sudo mkdir -p /mnt/ccache && sudo chown "$(id -u):$(id -g)" /mnt/ccache
+          export CCACHE_DIR=/mnt/ccache
+          # 4 GB como máximo: la caché de GitHub es de 10 GB en total por repo
+          # (también guarda el firmware extraído, ~1 GB).
+          ccache -M 4G
+          ccache -o compression=true
+          ccache -o base_dir=/mnt/twrp
+          ccache -z
+          ccache -s
+
       - name: Traer el árbol preparado
         uses: actions/download-artifact@v4
         with:
@@ -207,10 +230,25 @@ jobs:
         run: |
           cd /mnt/twrp
           export ALLOW_MISSING_DEPENDENCIES=true
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
+          export CCACHE_DIR=/mnt/ccache
           set +u
           source build/envsetup.sh
           lunch twrp_${DISPOSITIVO}-eng
           mka bootimage -j"$(nproc)"
+
+      - name: Estadísticas de ccache
+        if: always()
+        run: CCACHE_DIR=/mnt/ccache ccache -s || true
+
+      # Se guarda aunque la compilación falle, así el próximo intento ya aprovecha lo compilado.
+      - name: Guardar ccache
+        if: always() && steps.ccache_rest.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/ccache
+          key: ccache-${{ env.RAMA_TWRP }}-${{ github.run_id }}
 
       - name: Renombrar resultado
         id: resultado
